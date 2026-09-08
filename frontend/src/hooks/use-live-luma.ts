@@ -1,18 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { CameraPhotoOutput } from "react-native-vision-camera";
-import { meanLumaFromJpegBytes } from "../utils/image-luma";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  CommonResolutions,
+  useFrameOutput,
+  type CameraFrameOutput,
+  type Frame,
+} from "react-native-vision-camera";
+import { runOnJS } from "react-native-worklets";
+import { useSharedValue } from "react-native-reanimated";
 
 export interface LiveLumaOptions {
-  /**
-   * The photo output to capture the low-energy light samples from.
-   *
-   * VisionCamera only supports a single photo output per session
-   * (AVFoundation allows one `AVCapturePhotoOutput`, CameraX one
-   * `ImageCapture`), so the light gate must share the capture-eligible
-   * photo output of the owning camera instead of creating its own.
-   */
-  photoOutput: CameraPhotoOutput;
   isActive: boolean;
+  /** Minimum milliseconds between forwarded samples (~2/s at 500). */
   sampleIntervalMs?: number;
   onError?: (error: unknown) => void;
 }
@@ -20,34 +18,104 @@ export interface LiveLumaOptions {
 export interface LiveLumaState {
   luma: number | null;
   sampling: boolean;
+  frameOutput: CameraFrameOutput;
 }
 
 /**
- * Live luminance sampler.
+ * Live luminance gate backed by the camera's Frame Output.
  *
- * VisionCamera v5 no longer ships a JS frame-processor API, so instead of
- * reading raw frames we capture a tiny, low-quality in-memory photo on the
- * session's photo output at a throttled rate and decode its average luma.
- * The whole operation is JS-only (jpeg-js + the photo pipeline) and stops
- * short as soon as it is not needed.
+ * The luma value is derived inside the frame worklet by subsampling the Y
+ * plane of a low-resolution YUV frame (throttled to ~2 samples/sec), then
+ * bridged to the JS thread via `runOnJS`. No photo capture, JPEG encoding or
+ * temp file is involved — the light gate no longer competes with the photo
+ * pipeline, which keeps the preview smooth and the exposure stable.
  *
- * `luma` is `null` while unknown, the first sample is pending, or sampling
- * failed — callers should treat `null` as a non-blocking "unknown" light
- * gate rather than hard-failing the capture.
+ * `luma` is `null` while unknown (before the first sample, while inactive, or
+ * after a sampling failure) — callers must treat `null` as a non-blocking
+ * "unknown" light gate rather than hard-failing the capture.
+ *
+ * @note Requires `react-native-vision-camera-worklets` (native) to be built
+ * into the running app.
  */
 export function useLiveLuma({
-  photoOutput,
   isActive,
-  sampleIntervalMs = 1200,
+  sampleIntervalMs = 500,
   onError,
 }: LiveLumaOptions): LiveLumaState {
-  const activeRef = useRef(isActive);
-  activeRef.current = isActive;
+  const setLumaRef = useRef<(value: number) => void>(() => {});
+  const setSamplingRef = useRef<(value: boolean) => void>(() => {});
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
 
   const [luma, setLuma] = useState<number | null>(null);
   const [sampling, setSampling] = useState(false);
+
+  const internalOnLuma = useCallback((value: number) => {
+    if (Number.isFinite(value)) {
+      setLumaRef.current(value);
+      setSamplingRef.current(true);
+    }
+  }, []);
+
+  const forward = useMemo(() => runOnJS(internalOnLuma), [internalOnLuma]);
+
+  const lastSampleAt = useSharedValue(0);
+  const onFrame = useCallback(
+    (frame: Frame) => {
+      "worklet";
+      try {
+        const now = Date.now();
+        if (now - lastSampleAt.value < sampleIntervalMs) return;
+        const planes = frame.getPlanes();
+        const plane = planes.length > 0 ? planes[0] : null;
+        if (!plane || plane.width <= 0 || plane.height <= 0) return;
+
+        const bytes = new Uint8Array(plane.getPixelBuffer());
+        const w = plane.width;
+        const h = plane.height;
+        const bytesPerRow = plane.bytesPerRow > 0 ? plane.bytesPerRow : w;
+        const stride = Math.max(1, Math.floor((w * h) / 4096));
+
+        let sum = 0;
+        let count = 0;
+        for (let y = 0; y < h; y++) {
+          const row = y * bytesPerRow;
+          for (let x = 0; x < w; x += stride) {
+            sum += bytes[row + x];
+            count += 1;
+          }
+        }
+        if (count === 0) return;
+
+        let mean = sum / count;
+        const pf = frame.pixelFormat ?? "";
+        if (pf.includes("video") && !pf.includes("full")) {
+          // Limited-range YUV (16..235) -> 0..255 to match the existing gate.
+          mean = (mean - 16) * (255 / 219);
+        }
+        if (mean < 0) mean = 0;
+        else if (mean > 255) mean = 255;
+
+        lastSampleAt.value = now;
+        forward(mean);
+      } catch (e) {
+        if (__DEV__) console.log("[live-luma] worklet sample error:", e);
+      } finally {
+        frame.dispose();
+      }
+    },
+    [forward, sampleIntervalMs],
+  );
+
+  const frameOutput = useFrameOutput({
+    targetResolution: CommonResolutions.VGA_4_3,
+    pixelFormat: "yuv",
+    dropFramesWhileBusy: true,
+    onFrame,
+    onFrameDropped: (reason) => {
+      if (__DEV__) console.log(`[live-luma] frame dropped: ${reason}`);
+    },
+  });
 
   useEffect(() => {
     if (!isActive) {
@@ -55,48 +123,16 @@ export function useLiveLuma({
       setSampling(false);
       return;
     }
+    setLumaRef.current = setLuma;
+    setSamplingRef.current = setSampling;
+  }, [isActive]);
 
-    let cancelled = false;
-    let busy = false;
+  useEffect(() => {
+    onErrorRef.current = onError;
+  }, [onError]);
 
-    const sample = async () => {
-      if (busy || cancelled || !activeRef.current) return;
-      busy = true;
-      setSampling(true);
-      let photo: Awaited<ReturnType<CameraPhotoOutput["capturePhoto"]>> | null =
-        null;
-      try {
-        photo = await photoOutput.capturePhoto(
-          { flashMode: "off", enableShutterSound: false },
-          {},
-        );
-        if (cancelled) return;
-        const bytes = new Uint8Array(photo.getFileData());
-        const value = meanLumaFromJpegBytes(bytes);
-        if (!cancelled) setLuma(Number.isFinite(value) ? value : null);
-      } catch (e) {
-        if (!cancelled) {
-          if (__DEV__) console.log("[live-luma] sample error:", e);
-          onErrorRef.current?.(e);
-          setLuma(null);
-        }
-      } finally {
-        photo?.dispose();
-        busy = false;
-        if (!cancelled) setSampling(false);
-      }
-    };
-
-    const id = setInterval(() => {
-      void sample();
-    }, sampleIntervalMs);
-    void sample();
-
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [photoOutput, isActive, sampleIntervalMs]);
-
-  return useMemo(() => ({ luma, sampling }), [luma, sampling]);
+  return useMemo(
+    () => ({ luma, sampling, frameOutput }),
+    [luma, sampling, frameOutput],
+  );
 }

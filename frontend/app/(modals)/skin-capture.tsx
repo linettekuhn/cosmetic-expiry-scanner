@@ -27,6 +27,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import Toast from "react-native-toast-message";
+import * as Updates from "expo-updates";
 
 import { ThemedText } from "@/components/ui/themed-text";
 import ThemedButton from "@/components/ui/themed-button";
@@ -36,6 +37,7 @@ import SkinRingFlash from "@/components/skin/skin-ring-flash";
 import { useGuideOval } from "@/hooks/use-guide-oval";
 import { useLiveLuma } from "@/hooks/use-live-luma";
 import { analyzeCapture, type CaptureQualityResult } from "@/utils/capture-quality";
+import { flipPhotoHorizontal } from "@/utils/flip-photo";
 import { GATE_CONSTANTS, type GateFace } from "@/utils/face-gating";
 import {
   useSkinCapture,
@@ -47,6 +49,14 @@ const HOLD_MS = 1000;
 const SHUTTER_SIZE = 84;
 const btnColor = "#34BEAC";
 const txtColor = "#FFFFFF";
+
+// Diagnostic identity: bumped on each debug publish so we can tell which
+// bundle is actually running (release builds hide all console.log output).
+const DEBUG_GEN = 2;
+const DEBUG_UPDATE_ID = Updates.updateId;
+const DEBUG_UPDATE_LABEL = DEBUG_UPDATE_ID
+  ? `${DEBUG_UPDATE_ID.slice(0, 8)}/g${DEBUG_GEN}`
+  : `embedded/g${DEBUG_GEN}`;
 
 function toGateFace(face: Face | undefined): GateFace | null {
   if (
@@ -94,6 +104,22 @@ export default function SkinCaptureScreen() {
   const { hasPermission, requestPermission } = useCameraPermission();
   const { setDraft } = useSkinCapture();
 
+  const maxPhotoResolution = useMemo(() => {
+    if (!device) return null;
+    try {
+      const sizes = device.getSupportedResolutions("photo");
+      let best: { width: number; height: number } | null = null;
+      for (const s of sizes) {
+        if (!best || s.width * s.height > best.width * best.height) {
+          best = s;
+        }
+      }
+      return best;
+    } catch {
+      return null;
+    }
+  }, [device]);
+
   const [ready, setReady] = useState(false);
   const [faces, setFaces] = useState<Face[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -106,6 +132,12 @@ export default function SkinCaptureScreen() {
   const [quality, setQuality] = useState<CaptureQualityResult | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [appState, setAppState] = useState(AppState.currentState);
+  const [captureInfo, setCaptureInfo] = useState<{
+    width: number;
+    height: number;
+    flipped: boolean;
+    error?: string;
+  } | null>(null);
 
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
@@ -180,16 +212,15 @@ export default function SkinCaptureScreen() {
     appState === "active";
 
   const photoOutput = usePhotoOutput({
-    targetResolution: CommonResolutions.HD_4_3,
+    targetResolution: CommonResolutions.UHD_4_3,
     containerFormat: "jpeg",
-    quality: 0.8,
-    qualityPrioritization: "balanced",
+    quality: 0.9,
+    qualityPrioritization: "quality",
   });
 
-  const { luma, sampling } = useLiveLuma({
-    photoOutput,
-    isActive: cameraActive && !capturing,
-    sampleIntervalMs: 1200,
+  const { luma, sampling, frameOutput } = useLiveLuma({
+    isActive: cameraActive,
+    sampleIntervalMs: 500,
   });
 
   const primaryGateFace = primaryFaceRef.current ?? toGateFace(faces[0]);
@@ -224,7 +255,11 @@ export default function SkinCaptureScreen() {
     setCapturing(true);
     try {
       const result = await photoOutput.capturePhotoToFile(
-        { flashMode: "off", enableShutterSound: true },
+        {
+          flashMode: "off",
+          enableShutterSound: true,
+          enableDistortionCorrection: true,
+        },
         {},
       );
       const path = result.filePath;
@@ -235,8 +270,31 @@ export default function SkinCaptureScreen() {
           `[skin-capture] captured ${path} luma=${luma?.toFixed(1)} pass=${allPassRef.current}`,
         );
       }
-      setPhotoUri(uri);
-      setPhotoPath(path);
+      let outUri = uri;
+      let outPath = path;
+      let width = 0;
+      let height = 0;
+      let flipped = false;
+      let flipError: string | undefined;
+      if (device?.position === "front") {
+        const outcome = await flipPhotoHorizontal(uri);
+        outUri = outcome.uri;
+        outPath = outcome.path;
+        width = outcome.width;
+        height = outcome.height;
+        flipped = outcome.flipped;
+        flipError = outcome.error;
+        if (__DEV__) {
+          console.log(
+            `[skin-capture] ${outcome.flipped ? "mirrored front capture" : "flip fallback"} ` +
+              `${outcome.width}x${outcome.height} ${outcome.path}` +
+              (outcome.error ? ` (${outcome.error})` : ""),
+          );
+        }
+      }
+      setCaptureInfo({ width, height, flipped, error: flipError });
+      setPhotoUri(outUri);
+      setPhotoPath(outPath);
       setRingLight(false);
       setPhase("preview");
     } catch (e) {
@@ -251,7 +309,7 @@ export default function SkinCaptureScreen() {
       busyRef.current = false;
       setCapturing(false);
     }
-  }, [photoOutput, luma]);
+  }, [photoOutput, luma, device]);
 
   const triggerCaptureRef = useRef(triggerCapture);
   triggerCaptureRef.current = triggerCapture;
@@ -311,6 +369,7 @@ export default function SkinCaptureScreen() {
     setPhotoUri(null);
     setPhotoPath(null);
     setQuality(null);
+    setCaptureInfo(null);
     setAnalyzing(false);
     setPhase("camera");
   };
@@ -341,6 +400,20 @@ export default function SkinCaptureScreen() {
         : "Ready — hold still"
       : "Align your face with the oval";
 
+  const maxPhotoLabel = maxPhotoResolution
+    ? `${maxPhotoResolution.width}\u00D7${maxPhotoResolution.height}`
+    : "\u2013";
+  const cameraDebugLine = `photo max\u2248${maxPhotoLabel} \u00B7 up:${DEBUG_UPDATE_LABEL}`;
+  const captureInfoLine = captureInfo
+    ? `${captureInfo.width}\u00D7${captureInfo.height}` +
+      (captureInfo.flipped
+        ? "\u00B7mirrored"
+        : captureInfo.error
+          ? `\u00B7FAIL:${captureInfo.error}`
+          : "\u00B7original") +
+      ` \u00B7 max\u2248${maxPhotoLabel} \u00B7 up:${DEBUG_UPDATE_LABEL}`
+    : null;
+
   const shutterColor = allPass ? "#00E5A0" : "rgba(255,255,255,0.35)";
   const shutterDisabled = capturing || !allPass;
   const ringRadius = SHUTTER_SIZE / 2 + 8;
@@ -357,7 +430,7 @@ export default function SkinCaptureScreen() {
             isActive={cameraActive}
             mirrorMode="auto"
             enableLowLightBoost={device.supportsLowLightBoost}
-            outputs={[faceDetectorOutput, photoOutput]}
+            outputs={[faceDetectorOutput, frameOutput, photoOutput]}
             onError={(e) => {
               if (__DEV__) console.log("[skin-capture] camera onError:", e?.message ?? e);
               setError(String(e?.message ?? e));
@@ -386,7 +459,7 @@ export default function SkinCaptureScreen() {
               <Image
                 source={{ uri: photoUri }}
                 style={StyleSheet.absoluteFill}
-                resizeMode="cover"
+                resizeMode="contain"
               />
             )
           )}
@@ -441,6 +514,10 @@ export default function SkinCaptureScreen() {
                   </ThemedText>
                 )}
               </View>
+
+              <ThemedText style={styles.debugLine} type="caption">
+                {cameraDebugLine}
+              </ThemedText>
 
               <View style={{ width: SHUTTER_SIZE + 24, height: SHUTTER_SIZE + 24 }}>
                 <Svg
@@ -522,6 +599,11 @@ export default function SkinCaptureScreen() {
                     </ThemedText>
                   )}
                 </>
+              )}
+              {captureInfoLine && (
+                <ThemedText style={styles.debugLine} type="caption">
+                  {captureInfoLine}
+                </ThemedText>
               )}
               <View style={styles.buttonRow}>
                 <ThemedButton
@@ -634,6 +716,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
+  },
+  debugLine: {
+    color: txtColor,
+    opacity: 0.45,
+    textAlign: "center",
   },
   buttonRow: {
     flexDirection: "row",
