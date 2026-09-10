@@ -28,6 +28,7 @@ import { router } from "expo-router";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import Toast from "react-native-toast-message";
 import * as Updates from "expo-updates";
+import * as Brightness from "expo-brightness";
 
 import { ThemedText } from "@/components/ui/themed-text";
 import ThemedButton from "@/components/ui/themed-button";
@@ -36,7 +37,10 @@ import GuideOval, { type OvalMode } from "@/components/skin/guide-oval";
 import SkinRingFlash from "@/components/skin/skin-ring-flash";
 import { useGuideOval } from "@/hooks/use-guide-oval";
 import { useLiveLuma } from "@/hooks/use-live-luma";
-import { analyzeCapture, type CaptureQualityResult } from "@/utils/capture-quality";
+import {
+  analyzeCapture,
+  type CaptureQualityResult,
+} from "@/utils/capture-quality";
 import { flipPhotoHorizontal } from "@/utils/flip-photo";
 import { GATE_CONSTANTS, type GateFace } from "@/utils/face-gating";
 import {
@@ -44,19 +48,13 @@ import {
   type SkinLandmarkRefs,
   type SkinPose,
 } from "@/contexts/SkinCaptureContext";
+import { Colors } from "@/constants/theme";
 
 const HOLD_MS = 1000;
 const SHUTTER_SIZE = 84;
-const btnColor = "#34BEAC";
-const txtColor = "#FFFFFF";
-
-// Diagnostic identity: bumped on each debug publish so we can tell which
-// bundle is actually running (release builds hide all console.log output).
-const DEBUG_GEN = 2;
-const DEBUG_UPDATE_ID = Updates.updateId;
-const DEBUG_UPDATE_LABEL = DEBUG_UPDATE_ID
-  ? `${DEBUG_UPDATE_ID.slice(0, 8)}/g${DEBUG_GEN}`
-  : `embedded/g${DEBUG_GEN}`;
+const btnColor = Colors["light"].primary[400];
+const txtColor = Colors["light"].neutral[100];
+const disabledColor = Colors["light"].neutral[300];
 
 function toGateFace(face: Face | undefined): GateFace | null {
   if (
@@ -127,6 +125,29 @@ export default function SkinCaptureScreen() {
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [photoPath, setPhotoPath] = useState<string | null>(null);
   const [ringLight, setRingLight] = useState(false);
+  const prevBrightnessRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (ringLight) {
+      Brightness.getBrightnessAsync()
+        .then((prev) => {
+          prevBrightnessRef.current = prev;
+        })
+        .then(() => Brightness.setBrightnessAsync(1));
+    } else if (prevBrightnessRef.current != null) {
+      Brightness.setBrightnessAsync(prevBrightnessRef.current);
+      prevBrightnessRef.current = null;
+    }
+  }, [ringLight]);
+
+  useEffect(() => {
+    return () => {
+      if (prevBrightnessRef.current == null) return;
+      Brightness.setBrightnessAsync(prevBrightnessRef.current);
+      prevBrightnessRef.current = null;
+    };
+  }, []);
+
   const [capturing, setCapturing] = useState(false);
   const [holdProgress, setHoldProgress] = useState(0);
   const [quality, setQuality] = useState<CaptureQualityResult | null>(null);
@@ -244,7 +265,8 @@ export default function SkinCaptureScreen() {
     if (phase !== "camera") return;
     if (lowLight && !wasLowLightRef.current) {
       setRingLight(true);
-      if (__DEV__) console.log("[skin-capture] low light detected, ring flash on");
+      if (__DEV__)
+        console.log("[skin-capture] low light detected, ring flash on");
     }
     wasLowLightRef.current = lowLight;
   }, [lowLight, phase]);
@@ -390,38 +412,28 @@ export default function SkinCaptureScreen() {
     router.back();
   };
 
-  const mode: OvalMode = !primaryGateFace ? "gray" : allPass ? "green" : "amber";
+  const mode: OvalMode = !primaryGateFace
+    ? "gray"
+    : allPass
+      ? "green"
+      : "amber";
 
   const statusLine = capturing
-    ? "Capturing…"
+    ? ""
     : allPass
       ? holdProgress > 0 && holdProgress < 1
         ? "Hold steady…"
-        : "Ready — hold still"
+        : "Ready! Hold still"
       : "Align your face with the oval";
 
-  const maxPhotoLabel = maxPhotoResolution
-    ? `${maxPhotoResolution.width}\u00D7${maxPhotoResolution.height}`
-    : "\u2013";
-  const cameraDebugLine = `photo max\u2248${maxPhotoLabel} \u00B7 up:${DEBUG_UPDATE_LABEL}`;
-  const captureInfoLine = captureInfo
-    ? `${captureInfo.width}\u00D7${captureInfo.height}` +
-      (captureInfo.flipped
-        ? "\u00B7mirrored"
-        : captureInfo.error
-          ? `\u00B7FAIL:${captureInfo.error}`
-          : "\u00B7original") +
-      ` \u00B7 max\u2248${maxPhotoLabel} \u00B7 up:${DEBUG_UPDATE_LABEL}`
-    : null;
-
-  const shutterColor = allPass ? "#00E5A0" : "rgba(255,255,255,0.35)";
+  const shutterColor = allPass ? btnColor : disabledColor;
   const shutterDisabled = capturing || !allPass;
   const ringRadius = SHUTTER_SIZE / 2 + 8;
   const ringCircumference = 2 * Math.PI * ringRadius;
 
   return (
     <View style={styles.container}>
-      <StatusBar style="light" />
+      <StatusBar style={ringLight ? "dark" : "light"} />
       {ready && device ? (
         <View style={StyleSheet.absoluteFill}>
           <Camera
@@ -429,10 +441,10 @@ export default function SkinCaptureScreen() {
             device={device}
             isActive={cameraActive}
             mirrorMode="auto"
-            enableLowLightBoost={device.supportsLowLightBoost}
             outputs={[faceDetectorOutput, frameOutput, photoOutput]}
             onError={(e) => {
-              if (__DEV__) console.log("[skin-capture] camera onError:", e?.message ?? e);
+              if (__DEV__)
+                console.log("[skin-capture] camera onError:", e?.message ?? e);
               setError(String(e?.message ?? e));
             }}
             onStarted={() => {
@@ -452,7 +464,7 @@ export default function SkinCaptureScreen() {
                 width={width}
                 height={height}
               />
-              <SkinRingFlash active={ringLight} geometry={geometry} />
+              <SkinRingFlash active={ringLight} />
             </>
           ) : (
             photoUri && (
@@ -467,17 +479,11 @@ export default function SkinCaptureScreen() {
           <View style={[styles.topBar, { top: insets.top + 12 }]}>
             <IconButton
               iconColor={txtColor}
+              activeColor={btnColor}
               onPress={phase === "preview" ? handleRetake : () => router.back()}
               IconComponent={MaterialCommunityIcons}
               iconName="close"
             />
-            <ThemedText
-              style={[styles.title, { color: txtColor }]}
-              type="bodyLarge"
-              weight="bold"
-            >
-              Skin check-in
-            </ThemedText>
             {phase === "camera" && (
               <>
                 <View style={{ flex: 1 }} />
@@ -485,52 +491,32 @@ export default function SkinCaptureScreen() {
                   <ActivityIndicator size="small" color={txtColor} />
                 )}
                 <IconButton
-                  iconColor={
-                    ringLight ? "#FFE3A6" : txtColor
-                  }
                   active={ringLight}
-                  activeColor="#F4B740"
+                  iconColor={txtColor}
+                  activeColor={btnColor}
                   onPress={() => setRingLight((p) => !p)}
                   IconComponent={MaterialCommunityIcons}
-                  iconName="sun-wireless-outline"
+                  iconName="flashlight"
                 />
               </>
             )}
           </View>
 
           {phase === "camera" ? (
-            <View style={[styles.bottomSection, { bottom: insets.bottom + 40 }]}>
-              <View style={styles.statusRow}>
-                <ThemedText
-                  style={{ color: txtColor, opacity: 0.9 }}
-                  type="bodyLarge"
-                  weight={allPass ? "semiBold" : "medium"}
-                >
-                  {statusLine}
-                </ThemedText>
-                {luma != null && (
-                  <ThemedText style={{ color: txtColor, opacity: 0.55 }} type="caption">
-                    luma {luma.toFixed(0)}
-                  </ThemedText>
-                )}
-              </View>
-
-              <ThemedText style={styles.debugLine} type="caption">
-                {cameraDebugLine}
-              </ThemedText>
-
-              <View style={{ width: SHUTTER_SIZE + 24, height: SHUTTER_SIZE + 24 }}>
-                <Svg
-                  style={StyleSheet.absoluteFill}
-                  pointerEvents="none"
-                >
+            <View
+              style={[styles.bottomSection, { bottom: insets.bottom + 40 }]}
+            >
+              <View
+                style={{ width: SHUTTER_SIZE + 24, height: SHUTTER_SIZE + 24 }}
+              >
+                <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
                   {allPass && !capturing && (
                     <Circle
                       cx={SHUTTER_SIZE / 2 + 12}
                       cy={SHUTTER_SIZE / 2 + 12}
                       r={ringRadius}
                       fill="none"
-                      stroke="#00E5A0"
+                      stroke={Colors["light"].secondary[400]}
                       strokeWidth={4}
                       strokeLinecap="round"
                       strokeDasharray={`${ringCircumference}`}
@@ -555,7 +541,9 @@ export default function SkinCaptureScreen() {
                     <View
                       style={[
                         styles.shutterInner,
-                        { backgroundColor: allPass ? "#00E5A0" : "rgba(255,255,255,0.35)" },
+                        {
+                          backgroundColor: allPass ? btnColor : disabledColor,
+                        },
                       ]}
                     />
                   )}
@@ -576,34 +564,48 @@ export default function SkinCaptureScreen() {
                   <View style={styles.qualityRow}>
                     <MaterialCommunityIcons
                       name={
-                        quality && (quality.blurry || quality.tooDark || quality.tooBright)
+                        quality &&
+                        (quality.blurry || quality.tooDark || quality.tooBright)
                           ? "alert-circle-outline"
                           : "check-decagram-outline"
                       }
                       size={18}
-                      color={quality && !quality.blurry && !quality.tooDark && !quality.tooBright ? "#00E5A0" : "#F4B740"}
+                      color={
+                        quality &&
+                        !quality.blurry &&
+                        !quality.tooDark &&
+                        !quality.tooBright
+                          ? btnColor
+                          : "#F4B740"
+                      }
                     />
-                    <ThemedText style={{ color: txtColor }} type="bodyLarge" weight="semiBold">
-                      {quality && (quality.blurry || quality.tooDark || quality.tooBright)
+                    <ThemedText
+                      style={{ color: txtColor }}
+                      type="bodyLarge"
+                      weight="semiBold"
+                    >
+                      {quality &&
+                      (quality.blurry || quality.tooDark || quality.tooBright)
                         ? "Retake recommended"
                         : "Looks good"}
                     </ThemedText>
                   </View>
-                  {quality && (quality.tooDark || quality.tooBright || quality.blurry) && (
-                    <ThemedText style={{ color: txtColor, opacity: 0.7 }} type="caption">
-                      {quality.tooDark
-                        ? "A bit dark — use more light."
-                        : quality.tooBright
-                          ? "A bit bright — move out of direct light."
-                          : "Looking a little blurry — steady your hand."}
-                    </ThemedText>
-                  )}
+                  {quality &&
+                    (quality.tooDark ||
+                      quality.tooBright ||
+                      quality.blurry) && (
+                      <ThemedText
+                        style={{ color: txtColor, opacity: 0.7 }}
+                        type="caption"
+                      >
+                        {quality.tooDark
+                          ? "A bit dark! use more light."
+                          : quality.tooBright
+                            ? "A bit bright! move out of direct light."
+                            : "Looking a little blurry! steady your hand."}
+                      </ThemedText>
+                    )}
                 </>
-              )}
-              {captureInfoLine && (
-                <ThemedText style={styles.debugLine} type="caption">
-                  {captureInfoLine}
-                </ThemedText>
               )}
               <View style={styles.buttonRow}>
                 <ThemedButton
@@ -638,7 +640,10 @@ export default function SkinCaptureScreen() {
                 : "Initializing…"}
           </ThemedText>
           {error && (
-            <ThemedText style={{ color: txtColor, opacity: 0.7 }} type="caption">
+            <ThemedText
+              style={{ color: txtColor, opacity: 0.7 }}
+              type="caption"
+            >
               {error}
             </ThemedText>
           )}
@@ -716,11 +721,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
-  },
-  debugLine: {
-    color: txtColor,
-    opacity: 0.45,
-    textAlign: "center",
   },
   buttonRow: {
     flexDirection: "row",

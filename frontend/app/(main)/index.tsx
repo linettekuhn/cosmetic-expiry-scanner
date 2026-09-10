@@ -86,14 +86,14 @@ export default function HomeScreen() {
         <EntryCards />
         <ThemedButton
           text="Skin check-in (12B)"
-          onPress={() => router.navigate("/(modals)/skin-capture")}
+          onPress={() => router.push("/(modals)/skin-capture")}
           alignment="flex-start"
         />
         {__DEV__ && (
           <ThemedButton
             outlined
             text="Dev: Skin face-detection test"
-            onPress={() => router.navigate("/(modals)/skin-face-test")}
+            onPress={() => router.push("/(modals)/skin-face-test")}
             alignment="flex-start"
           />
         )}

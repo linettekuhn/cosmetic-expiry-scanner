@@ -10,12 +10,13 @@ export default function ModalLayout() {
   const colorScheme = useColorScheme();
   const colors = Colors[getTheme(colorScheme)];
   const segments = useSegments();
-  const isScannerActive = segments[segments.length - 1] === "scan";
+  const lastSegment = segments[segments.length - 1];
+  const isEdgeToEdgeRoute = lastSegment === "scan" || lastSegment === "skin-capture";
 
   return (
     <SafeAreaView
       style={{ flex: 1, backgroundColor: colors.background }}
-      edges={isScannerActive ? [] : ["top", "bottom", "left", "right"]}
+      edges={isEdgeToEdgeRoute ? [] : ["top", "bottom", "left", "right"]}
     >
       <ScanProvider>
         <TemplateProvider>

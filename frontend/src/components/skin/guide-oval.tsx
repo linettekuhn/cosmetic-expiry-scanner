@@ -3,16 +3,13 @@ import { Animated, StyleSheet, View } from "react-native";
 import Svg, { Path, Ellipse } from "react-native-svg";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { ThemedText } from "@/components/ui/themed-text";
-import type {
-  GateName,
-  GateResult,
-  OvalGeometry,
-} from "@/utils/face-gating";
+import type { GateName, GateResult, OvalGeometry } from "@/utils/face-gating";
+import { Colors } from "@/constants/theme";
 
 const OVAL_COLORS = {
-  gray: "#9AA7A6",
+  gray: Colors["light"].neutral[300],
   amber: "#F4B740",
-  green: "#00E5A0",
+  green: Colors["light"].primary[400],
 } as const;
 
 export type OvalMode = keyof typeof OVAL_COLORS;
@@ -117,7 +114,9 @@ export default function GuideOval({
         />
       </Svg>
 
-      <Animated.View style={[StyleSheet.absoluteFill, { opacity: greenOpacity }]}>
+      <Animated.View
+        style={[StyleSheet.absoluteFill, { opacity: greenOpacity }]}
+      >
         <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
           <Ellipse
             cx={oval.cx}
@@ -131,7 +130,7 @@ export default function GuideOval({
         </Svg>
       </Animated.View>
 
-      <View style={[styles.chips, { top: inner.top - 46 }]}>
+      <View style={[styles.chips, { top: inner.top - 66 }]}>
         {CHIP_DEFS.map((chip) => {
           const pass = gates[chip.gate];
           const color =
@@ -142,7 +141,11 @@ export default function GuideOval({
                 : OVAL_COLORS.amber;
           return (
             <View key={chip.gate} style={[styles.chip, { borderColor: color }]}>
-              <MaterialCommunityIcons name={chip.icon} size={14} color={color} />
+              <MaterialCommunityIcons
+                name={chip.icon}
+                size={14}
+                color={color}
+              />
               <ThemedText style={{ color, fontSize: 10 }} weight="semiBold">
                 {chip.label}
               </ThemedText>
@@ -152,7 +155,7 @@ export default function GuideOval({
       </View>
 
       {gates.tips.length > 0 && (
-        <View style={[styles.tipPill, { top: inner.top + inner.height + 26 }]}>
+        <View style={[styles.tipPill, { top: inner.top + inner.height + 36 }]}>
           <MaterialCommunityIcons
             name="lightbulb-on-outline"
             size={14}
@@ -162,7 +165,7 @@ export default function GuideOval({
             style={{ color: "#FFF8EA", fontSize: 13, flex: 1 }}
             weight="medium"
           >
-            {gates.tips.slice(0, 2).join(" ")}
+            {gates.tips.slice(0, 2).join(". ")}
           </ThemedText>
         </View>
       )}

@@ -56,7 +56,7 @@ const TIP_MAP: Record<GateName, string> = {
   centered: "Move your face into the oval",
   distance: "Adjust your distance to fit inside the oval",
   pose: "Face the camera and keep your head level",
-  brightness: "Not enough light — try the ring light",
+  brightness: "Not enough light. Try the ring light",
 };
 
 export function evaluateGates(
@@ -119,7 +119,8 @@ export function evaluateGates(
   if (luma == null || !Number.isFinite(luma)) {
     brightness = true;
   } else {
-    brightness = luma >= GATE_CONSTANTS.lumaMin && luma <= GATE_CONSTANTS.lumaMax;
+    brightness =
+      luma >= GATE_CONSTANTS.lumaMin && luma <= GATE_CONSTANTS.lumaMax;
   }
 
   if (!centered) fails.push("centered");
@@ -152,21 +153,25 @@ function diffTip(
 ): string | null {
   if (name === "distance" && !faceMissing) {
     if (metrics.faceWidthRatio < GATE_CONSTANTS.faceWidthMin) {
-      return "Too far — move a little closer";
+      return "Too far! Move a little closer";
     }
     if (metrics.faceWidthRatio > GATE_CONSTANTS.faceWidthMax) {
-      return "Too close — pull back a little";
+      return "Too close! Pull back a little";
     }
     return TIP_MAP.distance;
   }
   if (name === "brightness" && luma != null) {
     if (luma > GATE_CONSTANTS.lumaMax) {
-      return "Too bright — move out of direct light";
+      return "Too bright! Move out of direct light";
     }
   }
   return TIP_MAP[name];
 }
 
 function isFiniteRect(b: GateFace["bounds"]): boolean {
-  return [b.x, b.y, b.width, b.height].every(Number.isFinite) && b.width > 0 && b.height > 0;
+  return (
+    [b.x, b.y, b.width, b.height].every(Number.isFinite) &&
+    b.width > 0 &&
+    b.height > 0
+  );
 }
