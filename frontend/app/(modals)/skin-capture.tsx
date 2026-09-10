@@ -42,6 +42,7 @@ import {
   type CaptureQualityResult,
 } from "@/utils/capture-quality";
 import { flipPhotoHorizontal } from "@/utils/flip-photo";
+import { cropPhotoToScreenAspect } from "@/utils/crop-photo";
 import { GATE_CONSTANTS, type GateFace } from "@/utils/face-gating";
 import {
   useSkinCapture,
@@ -294,16 +295,16 @@ export default function SkinCaptureScreen() {
       }
       let outUri = uri;
       let outPath = path;
-      let width = 0;
-      let height = 0;
+      let photoW = 0;
+      let photoH = 0;
       let flipped = false;
       let flipError: string | undefined;
       if (device?.position === "front") {
         const outcome = await flipPhotoHorizontal(uri);
         outUri = outcome.uri;
         outPath = outcome.path;
-        width = outcome.width;
-        height = outcome.height;
+        photoW = outcome.width;
+        photoH = outcome.height;
         flipped = outcome.flipped;
         flipError = outcome.error;
         if (__DEV__) {
@@ -314,7 +315,31 @@ export default function SkinCaptureScreen() {
           );
         }
       }
-      setCaptureInfo({ width, height, flipped, error: flipError });
+      if (photoW > 0 && photoH > 0) {
+        const crop = await cropPhotoToScreenAspect(outUri, {
+          photoWidth: photoW,
+          photoHeight: photoH,
+          screenWidth: width,
+          screenHeight: height,
+        });
+        outUri = crop.uri;
+        outPath = crop.path;
+        photoW = crop.width;
+        photoH = crop.height;
+        if (__DEV__) {
+          console.log(
+            `[skin-capture] ${crop.cropped ? "cropped to screen aspect" : "crop fallback"} ` +
+              `${crop.width}x${crop.height} ${crop.path}` +
+              (crop.error ? ` (${crop.error})` : ""),
+          );
+        }
+      }
+      setCaptureInfo({
+        width: photoW,
+        height: photoH,
+        flipped,
+        error: flipError,
+      });
       setPhotoUri(outUri);
       setPhotoPath(outPath);
       setRingLight(false);
@@ -471,7 +496,7 @@ export default function SkinCaptureScreen() {
               <Image
                 source={{ uri: photoUri }}
                 style={StyleSheet.absoluteFill}
-                resizeMode="contain"
+                resizeMode="cover"
               />
             )
           )}
@@ -504,10 +529,10 @@ export default function SkinCaptureScreen() {
 
           {phase === "camera" ? (
             <View
-              style={[styles.bottomSection, { bottom: insets.bottom + 40 }]}
+              style={[styles.bottomSection, { bottom: insets.bottom + 12 }]}
             >
               <View
-                style={{ width: SHUTTER_SIZE + 24, height: SHUTTER_SIZE + 24 }}
+                style={{ width: SHUTTER_SIZE + 26, height: SHUTTER_SIZE + 24 }}
               >
                 <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
                   {allPass && !capturing && (

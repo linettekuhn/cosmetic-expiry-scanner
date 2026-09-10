@@ -4,6 +4,7 @@ import Svg, { Path, Ellipse } from "react-native-svg";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { ThemedText } from "@/components/ui/themed-text";
 import type { GateName, GateResult, OvalGeometry } from "@/utils/face-gating";
+import { useGuideTip } from "@/hooks/use-guide-tip";
 import { Colors } from "@/constants/theme";
 
 const OVAL_COLORS = {
@@ -88,6 +89,14 @@ export default function GuideOval({
 
   const { inner, oval } = geometry;
 
+  const {
+    text: tipText,
+    category: tipCategory,
+    opacity: tipOpacity,
+  } = useGuideTip(gates.tip);
+  const tipIsSuccess = tipCategory === "success";
+  const tipColor = tipIsSuccess ? OVAL_COLORS.green : OVAL_COLORS.amber;
+
   const baseColor = OVAL_COLORS[mode];
   const cutout = buildCutoutPath(
     width,
@@ -154,19 +163,31 @@ export default function GuideOval({
         })}
       </View>
 
-      {gates.tips.length > 0 && (
-        <View style={[styles.tipPill, { top: inner.top + inner.height + 36 }]}>
+      {tipText && (
+        <View
+          style={[
+            styles.tipPill,
+            {
+              borderColor: tipIsSuccess ? OVAL_COLORS.green : OVAL_COLORS.amber,
+              top: inner.top + inner.height + 36,
+            },
+          ]}
+        >
           <MaterialCommunityIcons
-            name="lightbulb-on-outline"
+            name={
+              tipIsSuccess ? "check-circle-outline" : "lightbulb-on-outline"
+            }
             size={14}
-            color={OVAL_COLORS.amber}
+            color={tipColor}
           />
-          <ThemedText
-            style={{ color: "#FFF8EA", fontSize: 13, flex: 1 }}
-            weight="medium"
-          >
-            {gates.tips.slice(0, 2).join(". ")}
-          </ThemedText>
+          <Animated.View style={{ opacity: tipOpacity, flex: 1 }}>
+            <ThemedText
+              style={{ color: tipColor, fontSize: 13, flex: 1 }}
+              weight="medium"
+            >
+              {tipText}
+            </ThemedText>
+          </Animated.View>
         </View>
       )}
     </View>
@@ -199,8 +220,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    backgroundColor: "rgba(43,30,10,0.78)",
-    borderColor: OVAL_COLORS.amber,
+    backgroundColor: "rgba(0, 0, 0, 0.71)",
     borderWidth: 1,
     borderRadius: 14,
     paddingHorizontal: 12,

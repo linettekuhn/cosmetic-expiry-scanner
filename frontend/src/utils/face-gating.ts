@@ -29,6 +29,32 @@ export interface GateMetrics {
   luma: number | null;
 }
 
+export type TipCategory = "face" | "position" | "distance" | "light";
+
+export const CATEGORY_PRIORITY: TipCategory[] = [
+  "face",
+  "position",
+  "distance",
+  "light",
+];
+
+export interface TipOutput {
+  category: TipCategory;
+  message: string;
+  /** Full set of currently-failing categories, regardless of which is shown. */
+  failing: TipCategory[];
+}
+
+export interface TipSelectorInput {
+  faceDetected: boolean;
+  centered: boolean;
+  pose: boolean;
+  distance: boolean;
+  brightness: boolean;
+  faceWidthRatio: number;
+  luma: number | null;
+}
+
 export interface GateResult {
   centered: boolean;
   distance: boolean;
@@ -36,14 +62,14 @@ export interface GateResult {
   brightness: boolean;
   allPass: boolean;
   fails: GateName[];
-  tips: string[];
+  tip: TipOutput | null;
   metrics: GateMetrics;
 }
 
 export const GATE_CONSTANTS = {
   centerToleranceX: 0.18,
   centerToleranceY: 0.2,
-  faceWidthMin: 0.5,
+  faceWidthMin: 0.9,
   faceWidthMax: 1.0,
   pitchMax: 15,
   rollMax: 10,
@@ -52,19 +78,58 @@ export const GATE_CONSTANTS = {
   lumaMax: 230,
 } as const;
 
-const TIP_MAP: Record<GateName, string> = {
-  centered: "Move your face into the oval",
-  distance: "Adjust your distance to fit inside the oval",
-  pose: "Face the camera and keep your head level",
-  brightness: "Not enough light. Try the ring light",
-};
+export function selectTip(input: TipSelectorInput): TipOutput | null {
+  const { faceDetected, centered, pose, distance, brightness } = input;
+  const failing: TipCategory[] = [];
+  if (!faceDetected) {
+    failing.push("face");
+  } else {
+    if (!centered || !pose) failing.push("position");
+    if (!distance) failing.push("distance");
+    if (!brightness) failing.push("light");
+  }
+  if (failing.length === 0) return null;
+
+  for (const category of CATEGORY_PRIORITY) {
+    if (!failing.includes(category)) continue;
+    return { category, message: messageForCategory(input, category), failing };
+  }
+  return null;
+}
+
+function messageForCategory(
+  input: TipSelectorInput,
+  category: TipCategory,
+): string {
+  const { centered, faceWidthRatio, luma } = input;
+  switch (category) {
+    case "face":
+      return "Move your face into the oval";
+    case "position":
+      return centered
+        ? "Face the camera and keep your head level"
+        : "Move your face into the oval";
+    case "distance":
+      if (faceWidthRatio < GATE_CONSTANTS.faceWidthMin) {
+        return "Too far! Move a little closer";
+      }
+      if (faceWidthRatio > GATE_CONSTANTS.faceWidthMax) {
+        return "Too close! Pull back a little";
+      }
+      return "Adjust your distance to fit inside the oval";
+    case "light":
+      if (luma != null && luma > GATE_CONSTANTS.lumaMax) {
+        return "Too bright! Move out of direct light";
+      }
+      return "Not enough light. Try the ring light";
+  }
+}
 
 export function evaluateGates(
   face: GateFace | null,
   inner: GuideRect,
   luma: number | null,
 ): GateResult {
-  const tips: string[] = [];
   const fails: GateName[] = [];
 
   const faceMissing = !face || !isFiniteRect(face.bounds);
@@ -128,10 +193,15 @@ export function evaluateGates(
   if (!pose) fails.push("pose");
   if (!brightness) fails.push("brightness");
 
-  for (const name of fails) {
-    const tip = diffTip(faceMissing, name, metrics, luma);
-    if (tip) tips.push(tip);
-  }
+  const tip = selectTip({
+    faceDetected: !faceMissing,
+    centered,
+    pose,
+    distance,
+    brightness,
+    faceWidthRatio: metrics.faceWidthRatio,
+    luma,
+  });
 
   return {
     centered,
@@ -140,32 +210,9 @@ export function evaluateGates(
     brightness,
     allPass: fails.length === 0,
     fails,
-    tips,
+    tip,
     metrics,
   };
-}
-
-function diffTip(
-  faceMissing: boolean,
-  name: GateName,
-  metrics: GateMetrics,
-  luma: number | null,
-): string | null {
-  if (name === "distance" && !faceMissing) {
-    if (metrics.faceWidthRatio < GATE_CONSTANTS.faceWidthMin) {
-      return "Too far! Move a little closer";
-    }
-    if (metrics.faceWidthRatio > GATE_CONSTANTS.faceWidthMax) {
-      return "Too close! Pull back a little";
-    }
-    return TIP_MAP.distance;
-  }
-  if (name === "brightness" && luma != null) {
-    if (luma > GATE_CONSTANTS.lumaMax) {
-      return "Too bright! Move out of direct light";
-    }
-  }
-  return TIP_MAP[name];
 }
 
 function isFiniteRect(b: GateFace["bounds"]): boolean {

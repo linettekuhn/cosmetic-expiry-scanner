@@ -19,7 +19,7 @@ export function computeOvalGeometry(
   height: number,
   topInset: number,
 ): OvalGeometry {
-  const innerWidth = Math.min(width * 0.6, 360);
+  const innerWidth = Math.min(width * 0.7, 360);
   const innerHeight = innerWidth * 1.4;
   const centerX = width / 2;
   const centerY = height * 0.46 + topInset * 0.1;
